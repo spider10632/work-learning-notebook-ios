@@ -1,12 +1,12 @@
-"use strict";
+﻿"use strict";
 
 /*
  * Personal Work Learning Notebook
  * iOS optimized cloud MVP: Supabase + PWA + IndexedDB offline sync
  */
 
-const SUPABASE_URL = "https://YOUR_PROJECT_REF.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+const SUPABASE_URL = "https://zsskayqfhceyghjocgdw.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_4FvasKv9EkNxtvtaY1tqow_kemJEm4n";
 const STORAGE_BUCKET = "note-attachments";
 
 const STORAGE_KEYS = {
