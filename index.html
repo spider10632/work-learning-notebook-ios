@@ -8,6 +8,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="WL Notebook" />
     <title>Personal Work Learning Notebook</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@500;700;800&display=swap"
+      rel="stylesheet"
+    />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180.png" />
     <link rel="stylesheet" href="./style.css" />
@@ -16,7 +22,10 @@
     <div class="app-shell">
       <header class="top-bar">
         <div class="brand">
-          <h1>Work Learning Notebook</h1>
+          <div class="brand-row">
+            <span class="brand-mark" aria-hidden="true">WL</span>
+            <h1>Work Learning Notebook</h1>
+          </div>
           <p>IHG / Front Office / Concierge / SOP</p>
         </div>
         <div class="top-actions hidden" id="cloudActions">
@@ -73,6 +82,25 @@
         </div>
       </section>
 
+      <section class="kpi-grid hidden" id="kpiGrid">
+        <article class="kpi-card">
+          <p>總筆記</p>
+          <strong id="statTotalNotes">0</strong>
+        </article>
+        <article class="kpi-card">
+          <p>收藏</p>
+          <strong id="statFavoriteNotes">0</strong>
+        </article>
+        <article class="kpi-card">
+          <p>待同步</p>
+          <strong id="statPendingOps">0</strong>
+        </article>
+        <article class="kpi-card">
+          <p>衝突</p>
+          <strong id="statConflicts">0</strong>
+        </article>
+      </section>
+
       <main class="notes-main hidden" id="notesMain">
         <div class="empty hidden" id="emptyState">
           <h3>目前沒有筆記</h3>
@@ -83,6 +111,11 @@
     </div>
 
     <button class="fab hidden" id="fabAdd" type="button" aria-label="新增筆記">＋</button>
+    <nav class="quick-nav hidden" id="quickNav" aria-label="quick navigation">
+      <button class="btn ghost" id="navSearchBtn" type="button">搜尋</button>
+      <button class="btn primary" id="navAddBtn" type="button">新增</button>
+      <button class="btn secondary" id="navSyncBtn" type="button">同步</button>
+    </nav>
 
     <div class="overlay hidden" id="editorOverlay">
       <section class="sheet" aria-modal="true" role="dialog" aria-labelledby="editorTitle">
@@ -116,6 +149,7 @@
             <label>語音輸入（Web Speech API）</label>
             <div class="speech-row">
               <select id="speechLangSelect">
+                <option value="mixed-zh-en">中英混合（zh-TW + English）</option>
                 <option value="zh-TW">中文（zh-TW）</option>
                 <option value="en-US">English（en-US）</option>
               </select>

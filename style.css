@@ -10,6 +10,7 @@
   --line: #2d3b52;
   --fav: #f4bd4f;
   --shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+  --glass: rgba(18, 26, 38, 0.82);
 }
 
 * {
@@ -18,8 +19,11 @@
 
 body {
   margin: 0;
-  font-family: "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif;
-  background: radial-gradient(circle at 15% -10%, #1d2e47 0%, var(--bg) 35%);
+  font-family: "Inter", "Noto Sans TC", "PingFang TC", sans-serif;
+  background:
+    radial-gradient(circle at 12% -10%, #233a5a 0%, rgba(35, 58, 90, 0) 40%),
+    radial-gradient(circle at 90% -5%, #1f4e7b 0%, rgba(31, 78, 123, 0) 32%),
+    var(--bg);
   color: var(--text);
   min-height: 100dvh;
 }
@@ -45,17 +49,23 @@ pre {
 .app-shell {
   width: min(980px, 100%);
   margin: 0 auto;
-  padding: max(16px, env(safe-area-inset-top)) 16px calc(96px + env(safe-area-inset-bottom));
+  padding: max(16px, env(safe-area-inset-top)) 16px calc(148px + env(safe-area-inset-bottom));
 }
 
 .top-bar {
   display: grid;
   gap: 12px;
+  background: linear-gradient(145deg, rgba(25, 37, 54, 0.78), rgba(20, 30, 44, 0.78));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: 0 10px 24px rgba(2, 6, 12, 0.3);
 }
 
 .brand h1 {
   margin: 0;
-  font-size: 1.15rem;
+  font-family: "Manrope", "Inter", sans-serif;
+  font-size: 1.14rem;
   letter-spacing: 0.02em;
 }
 
@@ -63,6 +73,27 @@ pre {
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #d8ecff;
+  background: linear-gradient(180deg, #2a6eb0, #1b4f87);
+  border: 1px solid #4f82ba;
 }
 
 .top-actions {
@@ -172,7 +203,7 @@ pre {
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: rgba(18, 26, 38, 0.9);
+  background: var(--glass);
   backdrop-filter: blur(8px);
   transition: padding 180ms ease, border-color 180ms ease;
 }
@@ -220,6 +251,34 @@ pre {
   margin-top: 14px;
 }
 
+.kpi-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kpi-card {
+  border: 1px solid #304663;
+  border-radius: 12px;
+  padding: 10px;
+  background: linear-gradient(180deg, #172539 0%, #121d2d 100%);
+}
+
+.kpi-card p {
+  margin: 0;
+  color: #a5b8d2;
+  font-size: 0.76rem;
+}
+
+.kpi-card strong {
+  display: inline-block;
+  margin-top: 6px;
+  font-family: "Manrope", sans-serif;
+  font-size: 1.16rem;
+  letter-spacing: 0.02em;
+}
+
 .notes-grid {
   display: grid;
   gap: 12px;
@@ -231,6 +290,17 @@ pre {
   border-radius: 12px;
   padding: 12px;
   box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+}
+
+.note-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #5aaef5, transparent);
+  opacity: 0.75;
 }
 
 .note-head {
@@ -258,7 +328,23 @@ pre {
   color: var(--muted);
   display: flex;
   gap: 8px;
+  align-items: center;
   flex-wrap: wrap;
+}
+
+.category-pill {
+  display: inline-block;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid #3d5f84;
+  background: rgba(70, 117, 168, 0.18);
+  color: #cde5ff;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+}
+
+.meta-updated {
+  color: #93a9c6;
 }
 
 .note-content {
@@ -323,7 +409,7 @@ pre {
 .fab {
   position: fixed;
   right: 18px;
-  bottom: max(18px, env(safe-area-inset-bottom));
+  bottom: max(84px, calc(66px + env(safe-area-inset-bottom)));
   width: 60px;
   height: 60px;
   border: none;
@@ -335,6 +421,24 @@ pre {
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 16px 32px rgba(18, 112, 184, 0.4);
+}
+
+.quick-nav {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(14px, env(safe-area-inset-bottom));
+  width: min(96vw, 540px);
+  z-index: 80;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid #324864;
+  background: rgba(10, 16, 24, 0.92);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.35);
 }
 
 .overlay {
@@ -478,7 +582,7 @@ pre {
 }
 
 .btn.primary {
-  background: var(--accent-strong);
+  background: linear-gradient(180deg, #329bf4, #1f7ed0);
   color: #f5fbff;
 }
 
@@ -645,5 +749,9 @@ pre {
 
   .conflict-columns {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .quick-nav {
+    width: min(70vw, 520px);
   }
 }

@@ -21,6 +21,24 @@ const MAX_ATTACHMENTS = 3;
 const SIGNED_URL_TTL_SECONDS = 600;
 const SEARCH_COLLAPSE_SCROLL_Y = 80;
 const OFFLINE_BLOB_PREFIX = "offline-blob:";
+const SPEECH_MODE_MIXED = "mixed-zh-en";
+const SUPPORTED_SPEECH_MODES = [SPEECH_MODE_MIXED, "zh-TW", "en-US"];
+const MIXED_GLOSSARY = [
+  { pattern: /\bcheck[\s-]?in\b/gi, replacement: "Check-in" },
+  { pattern: /\bcheck[\s-]?out\b/gi, replacement: "Check-out" },
+  { pattern: /\blate[\s-]?check[\s-]?out\b/gi, replacement: "Late Check-out" },
+  { pattern: /\bearly[\s-]?check[\s-]?in\b/gi, replacement: "Early Check-in" },
+  { pattern: /\bwalk[\s-]?in\b/gi, replacement: "Walk-in" },
+  { pattern: /\bno[\s-]?show\b/gi, replacement: "No-show" },
+  { pattern: /\bupgrade\b/gi, replacement: "Upgrade" },
+  { pattern: /\bconcierge\b/gi, replacement: "Concierge" },
+  { pattern: /\bfront[\s-]?desk\b/gi, replacement: "Front Desk" },
+  { pattern: /\bfolio\b/gi, replacement: "Folio" },
+  { pattern: /\brate[\s-]?code\b/gi, replacement: "Rate Code" },
+  { pattern: /\bvip\b/g, replacement: "VIP" },
+  { pattern: /\bihg\b/g, replacement: "IHG" },
+  { pattern: /\bpms\b/g, replacement: "PMS" }
+];
 
 const CATEGORIES = [
   "SOP",
@@ -110,11 +128,20 @@ function cacheElements() {
   refs.categoryFilter = byId("categoryFilter");
   refs.resultCount = byId("resultCount");
   refs.pendingCountText = byId("pendingCountText");
+  refs.kpiGrid = byId("kpiGrid");
+  refs.statTotalNotes = byId("statTotalNotes");
+  refs.statFavoriteNotes = byId("statFavoriteNotes");
+  refs.statPendingOps = byId("statPendingOps");
+  refs.statConflicts = byId("statConflicts");
 
   refs.notesMain = byId("notesMain");
   refs.notesList = byId("notesList");
   refs.emptyState = byId("emptyState");
   refs.fabAdd = byId("fabAdd");
+  refs.quickNav = byId("quickNav");
+  refs.navSearchBtn = byId("navSearchBtn");
+  refs.navAddBtn = byId("navAddBtn");
+  refs.navSyncBtn = byId("navSyncBtn");
 
   refs.loginBtn = byId("loginBtn");
   refs.logoutBtn = byId("logoutBtn");
@@ -192,6 +219,9 @@ function bindEvents() {
   refs.speechBtn.addEventListener("click", toggleSpeechInput);
   refs.syncNowBtn.addEventListener("click", handleManualSync);
   refs.conflictQueueBtn.addEventListener("click", openConflictFromQueue);
+  refs.navSearchBtn.addEventListener("click", focusSearchInput);
+  refs.navAddBtn.addEventListener("click", () => openEditor());
+  refs.navSyncBtn.addEventListener("click", handleManualSync);
 
   refs.closeImageModalBtn.addEventListener("click", closeImagePreview);
   refs.imageModal.addEventListener("click", (event) => {
@@ -242,10 +272,10 @@ function setupSpeechRecognition() {
   }
 
   const recognition = new Recognition();
-  recognition.lang = getPreferredSpeechLang();
+  recognition.lang = getRecognitionLangFromMode(getPreferredSpeechLang());
   recognition.interimResults = false;
   recognition.continuous = false;
-  recognition.maxAlternatives = 1;
+  recognition.maxAlternatives = 3;
 
   recognition.onstart = () => {
     state.listening = true;
@@ -256,8 +286,8 @@ function setupSpeechRecognition() {
   recognition.onend = () => {
     state.listening = false;
     refs.speechBtn.textContent = "開始語音輸入";
-    if (!refs.speechHint.textContent) {
-      refs.speechHint.textContent = "可將結果直接加入內容欄位。";
+    if (!refs.speechHint.textContent.includes("失敗")) {
+      applySpeechModeHint(refs.speechLangSelect.value);
     }
   };
 
@@ -268,18 +298,27 @@ function setupSpeechRecognition() {
   };
 
   recognition.onresult = (event) => {
-    const transcript = event.results?.[0]?.[0]?.transcript || "";
+    const mode = refs.speechLangSelect.value;
+    const transcript = pickSpeechTranscript(event, mode);
     if (!transcript) return;
+    const normalizedTranscript = normalizeSpeechTranscript(transcript, mode);
     const current = refs.contentInput.value.trim();
-    refs.contentInput.value = current ? `${current}\n${transcript}` : transcript;
-    refs.speechHint.textContent = "已加入語音文字。";
+    refs.contentInput.value = current ? `${current}\n${normalizedTranscript}` : normalizedTranscript;
+    refs.speechHint.textContent =
+      mode === SPEECH_MODE_MIXED ? "已加入語音文字（混合模式已優化常見英文術語）。" : "已加入語音文字。";
   };
 
   refs.speechLangSelect.addEventListener("change", () => {
-    recognition.lang = refs.speechLangSelect.value;
+    const mode = refs.speechLangSelect.value;
+    recognition.lang = getRecognitionLangFromMode(mode);
+    recognition.maxAlternatives = mode === SPEECH_MODE_MIXED ? 4 : 2;
+    if (!state.listening) {
+      applySpeechModeHint(mode);
+    }
     savePrefs();
   });
 
+  applySpeechModeHint(refs.speechLangSelect.value);
   state.speechRecognition = recognition;
 }
 
@@ -289,8 +328,80 @@ function toggleSpeechInput() {
     state.speechRecognition.stop();
     return;
   }
-  state.speechRecognition.lang = refs.speechLangSelect.value;
+  const mode = refs.speechLangSelect.value;
+  state.speechRecognition.lang = getRecognitionLangFromMode(mode);
+  state.speechRecognition.maxAlternatives = mode === SPEECH_MODE_MIXED ? 4 : 2;
   state.speechRecognition.start();
+}
+
+function getRecognitionLangFromMode(mode) {
+  return mode === SPEECH_MODE_MIXED ? "zh-TW" : mode || "zh-TW";
+}
+
+function applySpeechModeHint(mode) {
+  if (mode === SPEECH_MODE_MIXED) {
+    refs.speechHint.textContent = "混合模式：中文為主，會優先保留 Check-in / Upgrade / PMS 等英文術語。";
+    return;
+  }
+  refs.speechHint.textContent = "可將結果直接加入內容欄位。";
+}
+
+function pickSpeechTranscript(event, mode) {
+  const result = event.results?.[event.resultIndex ?? 0] || event.results?.[0];
+  if (!result || !result.length) return "";
+
+  if (mode !== SPEECH_MODE_MIXED) {
+    return String(result[0]?.transcript || "").trim();
+  }
+
+  let bestTranscript = "";
+  let bestScore = -Infinity;
+  for (const alternative of result) {
+    const candidate = String(alternative?.transcript || "").trim();
+    if (!candidate) continue;
+    const score = scoreSpeechAlternative(candidate);
+    if (score > bestScore) {
+      bestScore = score;
+      bestTranscript = candidate;
+    }
+  }
+  return bestTranscript;
+}
+
+function scoreSpeechAlternative(text) {
+  const candidate = text.toLowerCase();
+  let score = (candidate.match(/[a-z]/g) || []).length * 0.6;
+  const keywordBoosts = [
+    "check in",
+    "check out",
+    "upgrade",
+    "concierge",
+    "front desk",
+    "guest",
+    "folio",
+    "rate code",
+    "pms",
+    "ihg"
+  ];
+  for (const keyword of keywordBoosts) {
+    if (candidate.includes(keyword)) score += 6;
+  }
+  return score;
+}
+
+function normalizeSpeechTranscript(rawText, mode) {
+  let normalized = String(rawText || "")
+    .replace(/[。]/g, "。 ")
+    .replace(/[，]/g, ", ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (mode === SPEECH_MODE_MIXED) {
+    for (const item of MIXED_GLOSSARY) {
+      normalized = normalized.replace(item.pattern, item.replacement);
+    }
+  }
+  return normalized;
 }
 
 function populateCategorySelects() {
@@ -435,8 +546,10 @@ function setSignedInUI(isSignedIn) {
   refs.signedOutView.classList.toggle("hidden", isSignedIn);
   refs.signedInView.classList.toggle("hidden", !isSignedIn);
   refs.searchContainer.classList.toggle("hidden", !isSignedIn);
+  refs.kpiGrid.classList.toggle("hidden", !isSignedIn);
   refs.notesMain.classList.toggle("hidden", !isSignedIn);
   refs.fabAdd.classList.toggle("hidden", !isSignedIn);
+  refs.quickNav.classList.toggle("hidden", !isSignedIn);
   refs.cloudActions.classList.toggle("hidden", !isSignedIn);
   refs.syncPanel.classList.toggle("hidden", !isSignedIn);
 }
@@ -554,6 +667,7 @@ function renderNotes() {
   for (const note of state.filteredNotes) {
     refs.notesList.appendChild(buildNoteCard(note));
   }
+  updateDashboardStats();
 }
 
 function buildNoteCard(note) {
@@ -584,9 +698,14 @@ function buildNoteCard(note) {
 
   const meta = document.createElement("div");
   meta.className = "note-meta";
-  meta.innerHTML = `<span>分類：${escapeHtml(note.category)}</span><span>更新：${formatDateTime(
-    note.updatedAt
-  )}</span>`;
+  const categoryBadge = document.createElement("span");
+  categoryBadge.className = "category-pill";
+  categoryBadge.textContent = note.category;
+  const updatedText = document.createElement("span");
+  updatedText.className = "meta-updated";
+  updatedText.textContent = `更新：${formatDateTime(note.updatedAt)}`;
+  meta.appendChild(categoryBadge);
+  meta.appendChild(updatedText);
   card.appendChild(meta);
 
   const content = document.createElement("p");
@@ -1544,6 +1663,7 @@ async function refreshQueueIndicators() {
     refs.pendingCountText.textContent = "待同步 0";
     refs.conflictQueueBtn.classList.add("hidden");
     updateSyncStatusUI();
+    updateDashboardStats();
     return;
   }
 
@@ -1557,6 +1677,7 @@ async function refreshQueueIndicators() {
   refs.conflictQueueBtn.textContent = `衝突 ${conflicts.length}`;
   refs.conflictQueueBtn.classList.toggle("hidden", conflicts.length === 0);
   updateSyncStatusUI();
+  updateDashboardStats();
 }
 
 function updateSyncStatusUI() {
@@ -1581,6 +1702,20 @@ function updateSyncStatusUI() {
   } else {
     refs.syncStatusText.textContent = "尚未同步";
   }
+}
+
+function focusSearchInput() {
+  if (!state.user) return;
+  refs.searchContainer.classList.remove("collapsed");
+  refs.searchInput.focus({ preventScroll: true });
+  refs.searchInput.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function updateDashboardStats() {
+  refs.statTotalNotes.textContent = String(state.notes.length);
+  refs.statFavoriteNotes.textContent = String(state.notes.filter((note) => note.favorite).length);
+  refs.statPendingOps.textContent = String(state.pendingOpsCount);
+  refs.statConflicts.textContent = String(state.conflictsCount);
 }
 
 function upsertNoteInState(note) {
@@ -1856,7 +1991,7 @@ function loadPrefs() {
     const raw = localStorage.getItem(STORAGE_KEYS.prefs);
     if (!raw) return;
     const prefs = JSON.parse(raw);
-    if (prefs.speechLang && ["zh-TW", "en-US"].includes(prefs.speechLang)) {
+    if (prefs.speechLang && SUPPORTED_SPEECH_MODES.includes(prefs.speechLang)) {
       refs.speechLangSelect.value = prefs.speechLang;
     }
   } catch (_error) {
@@ -1870,7 +2005,8 @@ function savePrefs() {
 }
 
 function getPreferredSpeechLang() {
-  return refs.speechLangSelect.value || "zh-TW";
+  const currentMode = refs.speechLangSelect.value;
+  return SUPPORTED_SPEECH_MODES.includes(currentMode) ? currentMode : SPEECH_MODE_MIXED;
 }
 
 function showAuthErrorFromHashIfAny() {
