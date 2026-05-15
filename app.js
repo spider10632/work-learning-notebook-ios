@@ -596,7 +596,7 @@ async function applySession(session) {
   if (state.isOnline) {
     await refreshNotesFromCloud();
     await maybeRunLegacyMigration();
-    await processSyncQueue();
+    startSyncInBackground("applySession");
   } else {
     showToast("目前離線，將使用本機資料。");
   }
@@ -649,10 +649,7 @@ function handleOnlineStateChange() {
   state.isOnline = navigator.onLine;
   updateSyncStatusUI();
   if (state.isOnline) {
-    processSyncQueue().catch((error) => {
-      console.error(error);
-      showToast("自動同步失敗，可點擊立即同步重試。");
-    });
+    startSyncInBackground("online");
   }
 }
 
@@ -663,6 +660,14 @@ async function handleManualSync() {
     return;
   }
   await processSyncQueue();
+}
+
+function startSyncInBackground(origin) {
+  if (!state.isOnline) return;
+  processSyncQueue().catch((error) => {
+    console.error(`background sync failed (${origin})`, error);
+    showToast("背景同步失敗，可點擊立即同步重試。");
+  });
 }
 
 async function loadCachedNotesForUser(userId) {
@@ -1495,7 +1500,7 @@ async function handleSaveNote(event) {
     showToast(state.isOnline ? "筆記已儲存，將同步雲端。" : "已離線儲存，連網後自動同步。");
 
     if (state.isOnline) {
-      await processSyncQueue();
+      startSyncInBackground("saveNote");
     }
   } catch (error) {
     console.error(error);
@@ -1597,7 +1602,11 @@ async function uploadAudioBlobToStorage(noteId, blob, fileName) {
 async function requestAudioTranscription(path, langMode) {
   if (!supabaseClient) throw new Error("Supabase 尚未初始化");
   const payload = { path, bucket: AUDIO_STORAGE_BUCKET, langMode };
-  const { data, error } = await supabaseClient.functions.invoke(TRANSCRIBE_FUNCTION_NAME, { body: payload });
+  const { data, error } = await promiseWithTimeout(
+    supabaseClient.functions.invoke(TRANSCRIBE_FUNCTION_NAME, { body: payload }),
+    15000,
+    "語音轉寫逾時"
+  );
   if (error) throw error;
   const text = String(data?.text || "").trim();
   if (!text) return "";
@@ -1629,7 +1638,7 @@ async function toggleFavorite(noteId) {
   applyFiltersAndRender();
 
   if (state.isOnline) {
-    await processSyncQueue();
+    startSyncInBackground("toggleFavorite");
   }
 }
 
@@ -1656,7 +1665,7 @@ async function deleteNote(noteId) {
   showToast(state.isOnline ? "已加入刪除同步。" : "已離線刪除，連網後同步。");
 
   if (state.isOnline) {
-    await processSyncQueue();
+    startSyncInBackground("deleteNote");
   }
 }
 
@@ -1764,7 +1773,7 @@ async function handleImportFileSelect(event) {
     showToast("匯入完成，將同步到雲端。");
 
     if (state.isOnline) {
-      await processSyncQueue();
+      startSyncInBackground("import");
     }
   } catch (error) {
     console.error(error);
@@ -1839,7 +1848,7 @@ async function maybeRunLegacyMigration() {
     localStorage.setItem(migrationKey, "done");
 
     if (state.isOnline) {
-      await processSyncQueue();
+      startSyncInBackground("legacyMigration");
     }
 
     showToast("舊本機資料遷移完成。");
@@ -1951,26 +1960,6 @@ async function syncUpsertOperation(op) {
     localNote.id
   );
   const transcripts = normalizeTranscripts(localNote.transcripts || []);
-  const hasRecordedTranscript = transcripts.some((item) => item.source === "recorded");
-  if (!hasRecordedTranscript && resolvedAudioAttachments.length > 0) {
-    const latestAudioPath = resolvedAudioAttachments[resolvedAudioAttachments.length - 1];
-    if (latestAudioPath && !isOfflineAudioBlobPath(latestAudioPath)) {
-      try {
-        const text = await requestAudioTranscription(latestAudioPath, SPEECH_MODE_MIXED);
-        if (text) {
-          transcripts.push({
-            id: generateId(),
-            source: "recorded",
-            text,
-            langMode: SPEECH_MODE_MIXED,
-            createdAt: new Date().toISOString()
-          });
-        }
-      } catch (error) {
-        console.warn("auto transcription skipped", error);
-      }
-    }
-  }
 
   const noteToSync = {
     ...localNote,
@@ -2212,7 +2201,7 @@ async function resolveConflict(mode) {
     await refreshQueueIndicators();
 
     if (state.isOnline) {
-      await processSyncQueue();
+      startSyncInBackground("resolveConflict");
     }
   } catch (error) {
     console.error(error);
@@ -2563,6 +2552,24 @@ function dataUrlToImage(dataUrl) {
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error("圖片格式錯誤"));
     image.src = dataUrl;
+  });
+}
+
+function promiseWithTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message || "操作逾時"));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
   });
 }
 
