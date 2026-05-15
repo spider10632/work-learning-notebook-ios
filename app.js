@@ -7,7 +7,9 @@
 
 const SUPABASE_URL = "https://zsskayqfhceyghjocgdw.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_4FvasKv9EkNxtvtaY1tqow_kemJEm4n";
-const STORAGE_BUCKET = "note-attachments";
+const IMAGE_STORAGE_BUCKET = "note-attachments";
+const AUDIO_STORAGE_BUCKET = "note-audio";
+const TRANSCRIBE_FUNCTION_NAME = "transcribe-audio";
 
 const STORAGE_KEYS = {
   legacy: "pwl_notes_v1",
@@ -18,9 +20,11 @@ const STORAGE_KEYS = {
 const DB_NAME = "pwl_notebook_db";
 const DB_VERSION = 1;
 const MAX_ATTACHMENTS = 3;
+const MAX_AUDIO_ATTACHMENTS = 3;
 const SIGNED_URL_TTL_SECONDS = 600;
 const SEARCH_COLLAPSE_SCROLL_Y = 80;
-const OFFLINE_BLOB_PREFIX = "offline-blob:";
+const OFFLINE_IMAGE_BLOB_PREFIX = "offline-image-blob:";
+const OFFLINE_AUDIO_BLOB_PREFIX = "offline-audio-blob:";
 const SPEECH_MODE_MIXED = "mixed-zh-en";
 const SUPPORTED_SPEECH_MODES = [SPEECH_MODE_MIXED, "zh-TW", "en-US"];
 const MIXED_GLOSSARY = [
@@ -60,8 +64,19 @@ const state = {
   signedUrlCache: new Map(),
   editingId: null,
   editorExistingAttachments: [],
+  editorExistingAudioAttachments: [],
   editorNewFiles: [],
   editorPreviewUrls: [],
+  editorNewAudioFile: null,
+  editorNewAudioPreviewUrl: "",
+  editorTranscripts: [],
+  transcriptPreviewText: "",
+  recorder: null,
+  recorderStream: null,
+  recorderChunks: [],
+  recording: false,
+  transcribeInProgress: false,
+  audioRecorderSupported: false,
   speechRecognition: null,
   listening: false,
   toastTimer: null,
@@ -92,6 +107,7 @@ async function init() {
   bindEvents();
   setupScrollCollapse();
   setupSpeechRecognition();
+  setupAudioRecorderUI();
   showAuthErrorFromHashIfAny();
   await registerServiceWorker();
 
@@ -107,6 +123,19 @@ async function init() {
 
   toggleConfigNotice(false);
   await bootstrapAuth();
+}
+
+function setupAudioRecorderUI() {
+  const hasRecorder = Boolean(navigator.mediaDevices?.getUserMedia && typeof window.MediaRecorder !== "undefined");
+  state.audioRecorderSupported = hasRecorder;
+  if (!hasRecorder) {
+    refs.startRecordBtn.disabled = true;
+    refs.stopRecordBtn.disabled = true;
+    refs.resetRecordBtn.disabled = true;
+    refs.audioHint.textContent = "此瀏覽器不支援即時錄音，請使用「選擇錄音檔」。";
+  } else {
+    updateRecordingButtons(false);
+  }
 }
 
 function cacheElements() {
@@ -161,6 +190,20 @@ function cacheElements() {
   refs.speechLangSelect = byId("speechLangSelect");
   refs.speechBtn = byId("speechBtn");
   refs.speechHint = byId("speechHint");
+  refs.startRecordBtn = byId("startRecordBtn");
+  refs.stopRecordBtn = byId("stopRecordBtn");
+  refs.resetRecordBtn = byId("resetRecordBtn");
+  refs.pickAudioBtn = byId("pickAudioBtn");
+  refs.transcribeAudioBtn = byId("transcribeAudioBtn");
+  refs.audioUploadInput = byId("audioUploadInput");
+  refs.audioHint = byId("audioHint");
+  refs.recordedAudioPreview = byId("recordedAudioPreview");
+  refs.audioAttachmentPreview = byId("audioAttachmentPreview");
+  refs.transcriptPreviewPanel = byId("transcriptPreviewPanel");
+  refs.transcriptPreviewText = byId("transcriptPreviewText");
+  refs.appendTranscriptBtn = byId("appendTranscriptBtn");
+  refs.replaceTranscriptBtn = byId("replaceTranscriptBtn");
+  refs.clearTranscriptPreviewBtn = byId("clearTranscriptPreviewBtn");
   refs.pickPhotoBtn = byId("pickPhotoBtn");
   refs.takePhotoBtn = byId("takePhotoBtn");
   refs.attachmentsInput = byId("attachmentsInput");
@@ -215,8 +258,18 @@ function bindEvents() {
   refs.attachmentsInput.addEventListener("change", handleAttachmentFilePick);
   refs.cameraInput.addEventListener("change", handleAttachmentFilePick);
   refs.attachmentPreview.addEventListener("click", handleAttachmentPreviewClick);
+  refs.audioAttachmentPreview.addEventListener("click", handleAudioAttachmentActions);
 
   refs.speechBtn.addEventListener("click", toggleSpeechInput);
+  refs.startRecordBtn.addEventListener("click", handleStartRecording);
+  refs.stopRecordBtn.addEventListener("click", handleStopRecording);
+  refs.resetRecordBtn.addEventListener("click", handleResetRecording);
+  refs.pickAudioBtn.addEventListener("click", () => refs.audioUploadInput.click());
+  refs.audioUploadInput.addEventListener("change", handleAudioFilePick);
+  refs.transcribeAudioBtn.addEventListener("click", handleTranscribeAudio);
+  refs.appendTranscriptBtn.addEventListener("click", () => applyTranscriptPreview("append"));
+  refs.replaceTranscriptBtn.addEventListener("click", () => applyTranscriptPreview("replace"));
+  refs.clearTranscriptPreviewBtn.addEventListener("click", clearTranscriptPreview);
   refs.syncNowBtn.addEventListener("click", handleManualSync);
   refs.conflictQueueBtn.addEventListener("click", openConflictFromQueue);
   refs.navSearchBtn.addEventListener("click", focusSearchInput);
@@ -304,6 +357,13 @@ function setupSpeechRecognition() {
     const normalizedTranscript = normalizeSpeechTranscript(transcript, mode);
     const current = refs.contentInput.value.trim();
     refs.contentInput.value = current ? `${current}\n${normalizedTranscript}` : normalizedTranscript;
+    state.editorTranscripts.push({
+      id: generateId(),
+      source: "live",
+      text: normalizedTranscript,
+      langMode: mode,
+      createdAt: new Date().toISOString()
+    });
     refs.speechHint.textContent =
       mode === SPEECH_MODE_MIXED ? "已加入語音文字（混合模式已優化常見英文術語）。" : "已加入語音文字。";
   };
@@ -731,7 +791,7 @@ function buildNoteCard(note) {
     const img = document.createElement("img");
     img.alt = "attachment";
     img.dataset.path = path;
-    const cachedUrl = getCachedSignedUrl(path);
+    const cachedUrl = getCachedSignedUrl(IMAGE_STORAGE_BUCKET, path);
     if (isDataUrlAttachment(path) || isOfflineBlobPath(path)) {
       img.src = "";
     } else if (cachedUrl) {
@@ -754,6 +814,52 @@ function buildNoteCard(note) {
   }
   if ((note.attachments || []).length > 0) {
     card.appendChild(thumbList);
+  }
+
+  const audioPaths = note.audioAttachments || [];
+  if (audioPaths.length > 0) {
+    const audioList = document.createElement("div");
+    audioList.className = "note-audio-list";
+    audioPaths.forEach((path, index) => {
+      const item = document.createElement("div");
+      item.className = "audio-attachment-item";
+
+      const header = document.createElement("div");
+      header.className = "audio-attachment-item-header";
+      const title = document.createElement("span");
+      title.textContent = `錄音 ${index + 1}`;
+      header.appendChild(title);
+
+      if (isOfflineAudioBlobPath(path)) {
+        const status = document.createElement("span");
+        status.className = "muted";
+        status.textContent = "待同步";
+        header.appendChild(status);
+        item.appendChild(header);
+      } else {
+        item.appendChild(header);
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.preload = "metadata";
+        const cachedAudioUrl = getCachedSignedUrl(AUDIO_STORAGE_BUCKET, path);
+        if (cachedAudioUrl) {
+          audio.src = cachedAudioUrl;
+        } else {
+          hydrateSignedUrlForAudio(path, audio);
+        }
+        item.appendChild(audio);
+      }
+
+      audioList.appendChild(item);
+    });
+    card.appendChild(audioList);
+  }
+
+  if ((note.transcripts || []).length > 0) {
+    const transcriptMeta = document.createElement("div");
+    transcriptMeta.className = "note-meta";
+    transcriptMeta.textContent = `語音轉寫紀錄：${note.transcripts.length} 筆`;
+    card.appendChild(transcriptMeta);
   }
 
   const actions = document.createElement("div");
@@ -779,22 +885,39 @@ function buildNoteCard(note) {
 
 async function hydrateSignedUrlForImage(path, imgElement) {
   if (isDataUrlAttachment(path) || isOfflineBlobPath(path)) return;
-  const ok = await ensureSignedUrls([path]);
+  const ok = await ensureSignedUrls(IMAGE_STORAGE_BUCKET, [path]);
   if (!ok) return;
-  const url = getCachedSignedUrl(path);
+  const url = getCachedSignedUrl(IMAGE_STORAGE_BUCKET, path);
   if (!url) return;
   if (imgElement.isConnected) {
     imgElement.src = url;
   }
 }
 
-async function ensureSignedUrls(paths) {
+async function hydrateSignedUrlForAudio(path, audioElement) {
+  if (isOfflineBlobPath(path)) return;
+  const ok = await ensureSignedUrls(AUDIO_STORAGE_BUCKET, [path]);
+  if (!ok) return;
+  const url = getCachedSignedUrl(AUDIO_STORAGE_BUCKET, path);
+  if (!url) return;
+  if (audioElement.isConnected) {
+    audioElement.src = url;
+  }
+}
+
+function signedCacheKey(bucket, path) {
+  return `${bucket}:${path}`;
+}
+
+async function ensureSignedUrls(bucket, paths) {
   if (!supabaseClient || !paths.length || !state.isOnline) return false;
-  const missing = paths.filter((path) => !isDataUrlAttachment(path) && !isOfflineBlobPath(path) && !getCachedSignedUrl(path));
+  const missing = paths.filter(
+    (path) => !isDataUrlAttachment(path) && !isOfflineBlobPath(path) && !getCachedSignedUrl(bucket, path)
+  );
   if (!missing.length) return true;
 
   const { data, error } = await supabaseClient.storage
-    .from(STORAGE_BUCKET)
+    .from(bucket)
     .createSignedUrls(missing, SIGNED_URL_TTL_SECONDS);
 
   if (error) {
@@ -807,17 +930,18 @@ async function ensureSignedUrls(paths) {
     const path = item.path || missing[index];
     const signedUrl = item.signedUrl || item.signedURL;
     if (!path || !signedUrl) return;
-    state.signedUrlCache.set(path, { url: signedUrl, expiresAt });
+    state.signedUrlCache.set(signedCacheKey(bucket, path), { url: signedUrl, expiresAt });
   });
   return true;
 }
 
-function getCachedSignedUrl(path) {
+function getCachedSignedUrl(bucket, path) {
   if (isDataUrlAttachment(path)) return path;
-  const cached = state.signedUrlCache.get(path);
+  const cacheKey = signedCacheKey(bucket, path);
+  const cached = state.signedUrlCache.get(cacheKey);
   if (!cached) return "";
   if (Date.now() > cached.expiresAt) {
-    state.signedUrlCache.delete(path);
+    state.signedUrlCache.delete(cacheKey);
     return "";
   }
   return cached.url;
@@ -836,6 +960,8 @@ function openEditor(note) {
     refs.tagsInput.value = (note.tags || []).join(", ");
     refs.favoriteInput.checked = Boolean(note.favorite);
     state.editorExistingAttachments = [...(note.attachments || [])];
+    state.editorExistingAudioAttachments = [...(note.audioAttachments || [])];
+    state.editorTranscripts = [...(note.transcripts || [])];
     refs.createdAtText.textContent = `建立：${formatDateTime(note.createdAt)}`;
     refs.updatedAtText.textContent = `更新：${formatDateTime(note.updatedAt)}`;
   } else {
@@ -844,12 +970,16 @@ function openEditor(note) {
     refs.categoryInput.value = CATEGORIES[0];
     refs.favoriteInput.checked = false;
     state.editorExistingAttachments = [];
+    state.editorExistingAudioAttachments = [];
+    state.editorTranscripts = [];
     refs.createdAtText.textContent = "";
     refs.updatedAtText.textContent = "";
     refs.speechLangSelect.value = getPreferredSpeechLang();
   }
 
   renderAttachmentPreview();
+  renderAudioAttachmentPreview();
+  clearTranscriptPreview();
   refs.editorOverlay.classList.remove("hidden");
 }
 
@@ -861,11 +991,16 @@ function closeEditor() {
   refs.updatedAtText.textContent = "";
   state.editingId = null;
   state.editorExistingAttachments = [];
+  state.editorExistingAudioAttachments = [];
+  state.editorTranscripts = [];
   clearEditorTransientFiles();
   refs.attachmentPreview.innerHTML = "";
+  refs.audioAttachmentPreview.innerHTML = "";
+  clearTranscriptPreview();
   if (state.listening && state.speechRecognition) {
     state.speechRecognition.stop();
   }
+  stopRecorderAndReleaseStream();
 }
 
 function clearEditorTransientFiles() {
@@ -874,6 +1009,17 @@ function clearEditorTransientFiles() {
     URL.revokeObjectURL(previewUrl);
   }
   state.editorPreviewUrls = [];
+  if (state.editorNewAudioPreviewUrl) {
+    URL.revokeObjectURL(state.editorNewAudioPreviewUrl);
+  }
+  state.editorNewAudioPreviewUrl = "";
+  state.editorNewAudioFile = null;
+  refs.recordedAudioPreview.classList.add("hidden");
+  refs.recordedAudioPreview.removeAttribute("src");
+  refs.recordedAudioPreview.load();
+  refs.audioUploadInput.value = "";
+  refs.audioHint.textContent = "建議 30–90 秒；離線可先暫存，連網後再送轉寫。";
+  updateRecordingButtons(false);
   refs.attachmentsInput.value = "";
   refs.cameraInput.value = "";
 }
@@ -910,7 +1056,7 @@ function handleAttachmentPreviewClick(event) {
 
   if (type === "existing") {
     const [removedPath] = state.editorExistingAttachments.splice(index, 1);
-    if (removedPath) state.signedUrlCache.delete(removedPath);
+    if (removedPath) state.signedUrlCache.delete(signedCacheKey(IMAGE_STORAGE_BUCKET, removedPath));
   } else if (type === "new") {
     state.editorNewFiles.splice(index, 1);
   }
@@ -929,7 +1075,7 @@ function renderAttachmentPreview() {
     const item = document.createElement("div");
     item.className = "attachment-item";
     const img = document.createElement("img");
-    const url = getCachedSignedUrl(path);
+    const url = getCachedSignedUrl(IMAGE_STORAGE_BUCKET, path);
 
     if (isDataUrlAttachment(path)) {
       img.src = path;
@@ -987,6 +1133,290 @@ function renderAttachmentPreview() {
   });
 }
 
+function updateRecordingButtons(isRecording) {
+  refs.startRecordBtn.disabled = !state.audioRecorderSupported || isRecording;
+  refs.stopRecordBtn.disabled = !isRecording;
+  refs.pickAudioBtn.disabled = isRecording;
+  refs.transcribeAudioBtn.disabled = isRecording || state.transcribeInProgress;
+  refs.resetRecordBtn.disabled = !state.audioRecorderSupported || isRecording;
+}
+
+function stopRecorderAndReleaseStream() {
+  if (state.recorder && state.recorder.state !== "inactive") {
+    try {
+      state.recorder.stop();
+    } catch (_error) {
+      // ignore
+    }
+  }
+  if (state.recorderStream) {
+    for (const track of state.recorderStream.getTracks()) {
+      track.stop();
+    }
+  }
+  state.recorder = null;
+  state.recorderStream = null;
+  state.recorderChunks = [];
+  state.recording = false;
+  updateRecordingButtons(false);
+}
+
+async function handleStartRecording() {
+  if (!navigator.mediaDevices?.getUserMedia || typeof window.MediaRecorder === "undefined") {
+    refs.audioHint.textContent = "此瀏覽器錄音能力有限，請改用「選擇錄音檔」。";
+    showToast("目前不支援即時錄音，請改用選擇錄音檔。");
+    return;
+  }
+
+  try {
+    stopRecorderAndReleaseStream();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeTypes = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg"];
+    const selectedMimeType = mimeTypes.find((type) => window.MediaRecorder.isTypeSupported(type)) || "";
+    const recorder = selectedMimeType ? new MediaRecorder(stream, { mimeType: selectedMimeType }) : new MediaRecorder(stream);
+
+    state.recorderStream = stream;
+    state.recorder = recorder;
+    state.recorderChunks = [];
+
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size > 0) {
+        state.recorderChunks.push(event.data);
+      }
+    };
+
+    recorder.onstart = () => {
+      state.recording = true;
+      updateRecordingButtons(true);
+      refs.audioHint.textContent = "錄音中... 完成後按「停止錄音」。";
+    };
+
+    recorder.onstop = () => {
+      state.recording = false;
+      updateRecordingButtons(false);
+      const mimeType = recorder.mimeType || "audio/webm";
+      const blob = new Blob(state.recorderChunks, { type: mimeType });
+      state.recorderChunks = [];
+      if (!blob.size) {
+        refs.audioHint.textContent = "錄音失敗，請重試或改用選擇錄音檔。";
+        return;
+      }
+      const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
+      const file = new File([blob], `record-${Date.now()}.${ext}`, { type: mimeType });
+      setEditorAudioFile(file);
+      refs.audioHint.textContent = "錄音完成，可直接送出轉寫或儲存後再同步。";
+      stopRecorderAndReleaseStream();
+    };
+
+    recorder.onerror = () => {
+      refs.audioHint.textContent = "錄音失敗，請改用選擇錄音檔。";
+      stopRecorderAndReleaseStream();
+    };
+
+    recorder.start();
+  } catch (error) {
+    console.error(error);
+    refs.audioHint.textContent = "無法啟動錄音，請檢查麥克風權限。";
+    showToast("無法啟動錄音，請檢查麥克風權限。");
+    stopRecorderAndReleaseStream();
+  }
+}
+
+function handleStopRecording() {
+  if (!state.recorder || state.recorder.state === "inactive") return;
+  try {
+    state.recorder.stop();
+  } catch (error) {
+    console.error(error);
+    refs.audioHint.textContent = "停止錄音失敗，請重試。";
+  }
+}
+
+function handleResetRecording() {
+  stopRecorderAndReleaseStream();
+  if (state.editorNewAudioPreviewUrl) {
+    URL.revokeObjectURL(state.editorNewAudioPreviewUrl);
+  }
+  state.editorNewAudioPreviewUrl = "";
+  state.editorNewAudioFile = null;
+  refs.recordedAudioPreview.classList.add("hidden");
+  refs.recordedAudioPreview.removeAttribute("src");
+  refs.recordedAudioPreview.load();
+  refs.audioUploadInput.value = "";
+  refs.audioHint.textContent = "已清除錄音，可重新錄製或選擇錄音檔。";
+}
+
+function handleAudioFilePick(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  setEditorAudioFile(file);
+  refs.audioHint.textContent = "已載入錄音檔，可送出轉寫。";
+  refs.audioUploadInput.value = "";
+}
+
+function setEditorAudioFile(file) {
+  if (!file) return;
+  if (state.editorExistingAudioAttachments.length >= MAX_AUDIO_ATTACHMENTS) {
+    showToast(`每筆最多 ${MAX_AUDIO_ATTACHMENTS} 段錄音。`);
+    return;
+  }
+  if (state.editorNewAudioPreviewUrl) {
+    URL.revokeObjectURL(state.editorNewAudioPreviewUrl);
+  }
+  state.editorNewAudioFile = file;
+  state.editorNewAudioPreviewUrl = URL.createObjectURL(file);
+  refs.recordedAudioPreview.src = state.editorNewAudioPreviewUrl;
+  refs.recordedAudioPreview.classList.remove("hidden");
+}
+
+function handleAudioAttachmentActions(event) {
+  const button = event.target.closest("button[data-role='remove-audio']");
+  if (!button) return;
+  const index = Number(button.dataset.index);
+  if (Number.isNaN(index)) return;
+  const removed = state.editorExistingAudioAttachments.splice(index, 1)[0];
+  if (removed) {
+    state.signedUrlCache.delete(signedCacheKey(AUDIO_STORAGE_BUCKET, removed));
+  }
+  renderAudioAttachmentPreview();
+}
+
+function renderAudioAttachmentPreview() {
+  refs.audioAttachmentPreview.innerHTML = "";
+
+  state.editorExistingAudioAttachments.forEach((path, index) => {
+    const item = document.createElement("div");
+    item.className = "audio-attachment-item";
+
+    const header = document.createElement("div");
+    header.className = "audio-attachment-item-header";
+    const title = document.createElement("span");
+    title.textContent = `已附加錄音 ${index + 1}`;
+    header.appendChild(title);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "btn ghost small";
+    removeBtn.dataset.role = "remove-audio";
+    removeBtn.dataset.index = String(index);
+    removeBtn.textContent = "移除";
+    header.appendChild(removeBtn);
+
+    item.appendChild(header);
+
+    if (isOfflineAudioBlobPath(path)) {
+      const pending = document.createElement("p");
+      pending.className = "hint";
+      pending.textContent = "離線錄音待同步後可播放。";
+      item.appendChild(pending);
+    } else {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.preload = "metadata";
+      const cached = getCachedSignedUrl(AUDIO_STORAGE_BUCKET, path);
+      if (cached) {
+        audio.src = cached;
+      } else {
+        hydrateSignedUrlForAudio(path, audio);
+      }
+      item.appendChild(audio);
+    }
+
+    refs.audioAttachmentPreview.appendChild(item);
+  });
+}
+
+async function handleTranscribeAudio() {
+  if (!state.user) {
+    showToast("請先登入。");
+    return;
+  }
+  if (!state.isOnline) {
+    showToast("目前離線，無法立即轉寫。可先儲存，連網後再重試。");
+    return;
+  }
+  if (state.transcribeInProgress) return;
+
+  try {
+    state.transcribeInProgress = true;
+    updateRecordingButtons(false);
+    refs.transcribeAudioBtn.disabled = true;
+    refs.audioHint.textContent = "轉寫中，請稍候...";
+
+    if (state.editorNewAudioFile) {
+      const noteId = state.editingId || refs.noteId.value || generateId();
+      const uploaded = await prepareAudioAttachmentsForSave(noteId, [state.editorNewAudioFile]);
+      state.editorExistingAudioAttachments.push(...uploaded);
+      if (state.editorNewAudioPreviewUrl) {
+        URL.revokeObjectURL(state.editorNewAudioPreviewUrl);
+      }
+      state.editorNewAudioPreviewUrl = "";
+      state.editorNewAudioFile = null;
+      refs.recordedAudioPreview.classList.add("hidden");
+      refs.recordedAudioPreview.removeAttribute("src");
+      refs.recordedAudioPreview.load();
+      renderAudioAttachmentPreview();
+    }
+
+    const targetPath = state.editorExistingAudioAttachments[state.editorExistingAudioAttachments.length - 1];
+    if (!targetPath || isOfflineAudioBlobPath(targetPath)) {
+      throw new Error("目前沒有可送轉寫的雲端錄音。");
+    }
+
+    const langMode = refs.speechLangSelect.value;
+    let text = "";
+    try {
+      text = await requestAudioTranscription(targetPath, langMode);
+    } catch (error) {
+      throw new Error(
+        `轉寫服務不可用（請先部署 Edge Function: ${TRANSCRIBE_FUNCTION_NAME}）。${readableError(error)}`
+      );
+    }
+    if (!text) throw new Error("轉寫結果為空");
+
+    state.editorTranscripts.push({
+      id: generateId(),
+      source: "recorded",
+      text,
+      langMode,
+      createdAt: new Date().toISOString()
+    });
+    setTranscriptPreview(text);
+    refs.audioHint.textContent = "轉寫完成，可附加或覆蓋內容。";
+  } catch (error) {
+    console.error(error);
+    refs.audioHint.textContent = `轉寫失敗：${readableError(error)}`;
+    showToast(`轉寫失敗：${readableError(error)}`);
+  } finally {
+    state.transcribeInProgress = false;
+    updateRecordingButtons(false);
+  }
+}
+
+function setTranscriptPreview(text) {
+  state.transcriptPreviewText = String(text || "").trim();
+  refs.transcriptPreviewText.value = state.transcriptPreviewText;
+  refs.transcriptPreviewPanel.classList.toggle("hidden", !state.transcriptPreviewText);
+}
+
+function clearTranscriptPreview() {
+  state.transcriptPreviewText = "";
+  refs.transcriptPreviewText.value = "";
+  refs.transcriptPreviewPanel.classList.add("hidden");
+}
+
+function applyTranscriptPreview(mode) {
+  const text = state.transcriptPreviewText.trim();
+  if (!text) return;
+  if (mode === "replace") {
+    refs.contentInput.value = text;
+  } else {
+    const current = refs.contentInput.value.trim();
+    refs.contentInput.value = current ? `${current}\n${text}` : text;
+  }
+  showToast(mode === "replace" ? "已覆蓋內容欄位。" : "已附加到內容欄位。");
+}
+
 async function handleSaveNote(event) {
   event.preventDefault();
   if (!state.user) {
@@ -1011,6 +1441,12 @@ async function handleSaveNote(event) {
     showToast(`每筆最多 ${MAX_ATTACHMENTS} 張圖片。`);
     return;
   }
+  const totalAudioAttachments =
+    state.editorExistingAudioAttachments.length + (state.editorNewAudioFile ? 1 : 0);
+  if (totalAudioAttachments > MAX_AUDIO_ATTACHMENTS) {
+    showToast(`每筆最多 ${MAX_AUDIO_ATTACHMENTS} 段錄音。`);
+    return;
+  }
 
   const editing = state.notes.find((note) => note.id === state.editingId) || null;
   const noteId = editing?.id || generateId();
@@ -1021,6 +1457,12 @@ async function handleSaveNote(event) {
 
     const newAttachments = await prepareAttachmentsForSave(noteId, state.editorNewFiles);
     const attachments = [...state.editorExistingAttachments, ...newAttachments];
+    const newAudioAttachments = await prepareAudioAttachmentsForSave(
+      noteId,
+      state.editorNewAudioFile ? [state.editorNewAudioFile] : []
+    );
+    const audioAttachments = [...state.editorExistingAudioAttachments, ...newAudioAttachments];
+    const transcripts = normalizeTranscripts(state.editorTranscripts);
 
     const note = {
       id: noteId,
@@ -1030,6 +1472,8 @@ async function handleSaveNote(event) {
       tags,
       favorite,
       attachments,
+      audioAttachments,
+      transcripts,
       createdAt: editing?.createdAt || now,
       updatedAt: now
     };
@@ -1067,7 +1511,7 @@ async function prepareAttachmentsForSave(noteId, files) {
     const compressedBlob = await compressImageFile(file);
     if (state.isOnline) {
       try {
-        const path = await uploadBlobToStorage(noteId, compressedBlob, file.name || "image.jpg");
+        const path = await uploadImageBlobToStorage(noteId, compressedBlob, file.name || "image.jpg");
         paths.push(path);
         continue;
       } catch (error) {
@@ -1076,12 +1520,13 @@ async function prepareAttachmentsForSave(noteId, files) {
     }
 
     const blobId = generateId();
-    const placeholder = `${OFFLINE_BLOB_PREFIX}${blobId}`;
+    const placeholder = `${OFFLINE_IMAGE_BLOB_PREFIX}${blobId}`;
     await idbPut("pending_blobs", {
       blobId,
       userId: state.user.id,
       noteId,
       fileName: file.name || "image.jpg",
+      blobKind: "image",
       blob: compressedBlob,
       createdAt: new Date().toISOString()
     });
@@ -1090,11 +1535,11 @@ async function prepareAttachmentsForSave(noteId, files) {
   return paths;
 }
 
-async function uploadBlobToStorage(noteId, blob, fileName) {
+async function uploadImageBlobToStorage(noteId, blob, fileName) {
   const safeName = sanitizeFileName(fileName || "image");
   const path = `${state.user.id}/${noteId}/${Date.now()}-${safeName}.jpg`;
 
-  const { error } = await supabaseClient.storage.from(STORAGE_BUCKET).upload(path, blob, {
+  const { error } = await supabaseClient.storage.from(IMAGE_STORAGE_BUCKET).upload(path, blob, {
     cacheControl: "3600",
     contentType: "image/jpeg",
     upsert: false
@@ -1102,6 +1547,61 @@ async function uploadBlobToStorage(noteId, blob, fileName) {
   if (error) throw error;
 
   return path;
+}
+
+async function prepareAudioAttachmentsForSave(noteId, files) {
+  const paths = [];
+  for (const file of files) {
+    const blob = file instanceof Blob ? file : new Blob([file], { type: file?.type || "audio/webm" });
+    const name = file?.name || `record-${Date.now()}.webm`;
+    if (state.isOnline) {
+      try {
+        const path = await uploadAudioBlobToStorage(noteId, blob, name);
+        paths.push(path);
+        continue;
+      } catch (error) {
+        console.warn("Audio upload now failed, fallback to offline blob", error);
+      }
+    }
+
+    const blobId = generateId();
+    const placeholder = `${OFFLINE_AUDIO_BLOB_PREFIX}${blobId}`;
+    await idbPut("pending_blobs", {
+      blobId,
+      userId: state.user.id,
+      noteId,
+      fileName: name,
+      blobKind: "audio",
+      blob,
+      createdAt: new Date().toISOString()
+    });
+    paths.push(placeholder);
+  }
+  return paths;
+}
+
+async function uploadAudioBlobToStorage(noteId, blob, fileName) {
+  const safeName = sanitizeFileName(fileName || "record");
+  const extension = inferAudioExtension(blob.type || fileName);
+  const path = `${state.user.id}/${noteId}/${Date.now()}-${safeName}.${extension}`;
+
+  const { error } = await supabaseClient.storage.from(AUDIO_STORAGE_BUCKET).upload(path, blob, {
+    cacheControl: "3600",
+    contentType: blob.type || "audio/webm",
+    upsert: false
+  });
+  if (error) throw error;
+  return path;
+}
+
+async function requestAudioTranscription(path, langMode) {
+  if (!supabaseClient) throw new Error("Supabase 尚未初始化");
+  const payload = { path, bucket: AUDIO_STORAGE_BUCKET, langMode };
+  const { data, error } = await supabaseClient.functions.invoke(TRANSCRIBE_FUNCTION_NAME, { body: payload });
+  if (error) throw error;
+  const text = String(data?.text || "").trim();
+  if (!text) return "";
+  return normalizeSpeechTranscript(text, langMode);
 }
 
 async function toggleFavorite(noteId) {
@@ -1166,12 +1666,12 @@ async function openImagePreviewByPath(path) {
     return;
   }
 
-  const ok = await ensureSignedUrls([path]);
+  const ok = await ensureSignedUrls(IMAGE_STORAGE_BUCKET, [path]);
   if (!ok) {
     showToast("圖片讀取失敗。");
     return;
   }
-  const url = getCachedSignedUrl(path);
+  const url = getCachedSignedUrl(IMAGE_STORAGE_BUCKET, path);
   if (!url) {
     showToast("圖片讀取失敗。");
     return;
@@ -1446,7 +1946,39 @@ async function syncUpsertOperation(op) {
   }
 
   const resolvedAttachments = await resolveOfflineAttachments(localNote.attachments, localNote.id);
-  const noteToSync = { ...localNote, attachments: resolvedAttachments, updatedAt: new Date().toISOString() };
+  const resolvedAudioAttachments = await resolveOfflineAudioAttachments(
+    localNote.audioAttachments || [],
+    localNote.id
+  );
+  const transcripts = normalizeTranscripts(localNote.transcripts || []);
+  const hasRecordedTranscript = transcripts.some((item) => item.source === "recorded");
+  if (!hasRecordedTranscript && resolvedAudioAttachments.length > 0) {
+    const latestAudioPath = resolvedAudioAttachments[resolvedAudioAttachments.length - 1];
+    if (latestAudioPath && !isOfflineAudioBlobPath(latestAudioPath)) {
+      try {
+        const text = await requestAudioTranscription(latestAudioPath, SPEECH_MODE_MIXED);
+        if (text) {
+          transcripts.push({
+            id: generateId(),
+            source: "recorded",
+            text,
+            langMode: SPEECH_MODE_MIXED,
+            createdAt: new Date().toISOString()
+          });
+        }
+      } catch (error) {
+        console.warn("auto transcription skipped", error);
+      }
+    }
+  }
+
+  const noteToSync = {
+    ...localNote,
+    attachments: resolvedAttachments,
+    audioAttachments: resolvedAudioAttachments,
+    transcripts,
+    updatedAt: new Date().toISOString()
+  };
 
   if (!op.force && op.baseUpdatedAt) {
     const remote = await getRemoteNoteById(op.noteId);
@@ -1499,11 +2031,20 @@ async function syncDeleteOperation(op) {
   }
 
   const snapshot = normalizeSingleNote(op.payload);
-  const storagePaths = (snapshot?.attachments || []).filter((path) => !isDataUrlAttachment(path) && !isOfflineBlobPath(path));
-  if (storagePaths.length > 0) {
-    const { error: storageError } = await supabaseClient.storage.from(STORAGE_BUCKET).remove(storagePaths);
+  const imagePaths = (snapshot?.attachments || []).filter(
+    (path) => !isDataUrlAttachment(path) && !isOfflineImageBlobPath(path)
+  );
+  if (imagePaths.length > 0) {
+    const { error: storageError } = await supabaseClient.storage.from(IMAGE_STORAGE_BUCKET).remove(imagePaths);
     if (storageError) {
       console.warn("storage remove warning", storageError);
+    }
+  }
+  const audioPaths = (snapshot?.audioAttachments || []).filter((path) => !isOfflineAudioBlobPath(path));
+  if (audioPaths.length > 0) {
+    const { error: audioStorageError } = await supabaseClient.storage.from(AUDIO_STORAGE_BUCKET).remove(audioPaths);
+    if (audioStorageError) {
+      console.warn("audio storage remove warning", audioStorageError);
     }
   }
 
@@ -1522,18 +2063,41 @@ async function resolveOfflineAttachments(attachments, noteId) {
   const finalPaths = [];
 
   for (const path of attachments || []) {
-    if (!isOfflineBlobPath(path)) {
+    if (!isOfflineImageBlobPath(path)) {
       finalPaths.push(path);
       continue;
     }
 
-    const blobId = path.replace(OFFLINE_BLOB_PREFIX, "");
+    const blobId = path.replace(OFFLINE_IMAGE_BLOB_PREFIX, "");
     const blobRec = await idbGet("pending_blobs", blobId);
-    if (!blobRec?.blob) {
+    if (!blobRec?.blob || (blobRec.blobKind && blobRec.blobKind !== "image")) {
       continue;
     }
 
-    const storagePath = await uploadBlobToStorage(noteId, blobRec.blob, blobRec.fileName || "image.jpg");
+    const storagePath = await uploadImageBlobToStorage(noteId, blobRec.blob, blobRec.fileName || "image.jpg");
+    finalPaths.push(storagePath);
+    await idbDelete("pending_blobs", blobId);
+  }
+
+  return finalPaths;
+}
+
+async function resolveOfflineAudioAttachments(attachments, noteId) {
+  const finalPaths = [];
+
+  for (const path of attachments || []) {
+    if (!isOfflineAudioBlobPath(path)) {
+      finalPaths.push(path);
+      continue;
+    }
+
+    const blobId = path.replace(OFFLINE_AUDIO_BLOB_PREFIX, "");
+    const blobRec = await idbGet("pending_blobs", blobId);
+    if (!blobRec?.blob || blobRec.blobKind !== "audio") {
+      continue;
+    }
+
+    const storagePath = await uploadAudioBlobToStorage(noteId, blobRec.blob, blobRec.fileName || "record.webm");
     finalPaths.push(storagePath);
     await idbDelete("pending_blobs", blobId);
   }
@@ -1745,6 +2309,7 @@ function normalizeSingleNote(raw) {
   const createdAt = toIsoOrNow(raw.createdAt);
   const updatedAt = toIsoOrNow(raw.updatedAt);
   const category = CATEGORIES.includes(raw.category) ? raw.category : "Other";
+  const rawTranscripts = Array.isArray(raw.transcripts) ? raw.transcripts : [];
   return {
     id,
     title: String(raw.title || "").trim(),
@@ -1753,9 +2318,33 @@ function normalizeSingleNote(raw) {
     tags: parseTags(Array.isArray(raw.tags) ? raw.tags.join(",") : raw.tags || ""),
     favorite: Boolean(raw.favorite),
     attachments: Array.isArray(raw.attachments) ? raw.attachments.filter((p) => typeof p === "string") : [],
+    audioAttachments: Array.isArray(raw.audioAttachments)
+      ? raw.audioAttachments.filter((p) => typeof p === "string")
+      : Array.isArray(raw.audio_attachments)
+        ? raw.audio_attachments.filter((p) => typeof p === "string")
+        : [],
+    transcripts: normalizeTranscripts(rawTranscripts),
     createdAt,
     updatedAt
   };
+}
+
+function normalizeTranscripts(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const text = String(item.text || "").trim();
+      if (!text) return null;
+      return {
+        id: String(item.id || generateId()),
+        source: item.source === "recorded" ? "recorded" : "live",
+        text,
+        langMode: String(item.langMode || SPEECH_MODE_MIXED),
+        createdAt: toIsoOrNow(item.createdAt)
+      };
+    })
+    .filter(Boolean);
 }
 
 function parseTags(input) {
@@ -1783,6 +2372,8 @@ function mapRowToNote(row) {
     tags: Array.isArray(row.tags) ? row.tags : [],
     favorite: Boolean(row.favorite),
     attachments: Array.isArray(row.attachments) ? row.attachments : [],
+    audioAttachments: Array.isArray(row.audio_attachments) ? row.audio_attachments : [],
+    transcripts: normalizeTranscripts(Array.isArray(row.transcripts) ? row.transcripts : []),
     createdAt: toIsoOrNow(row.created_at),
     updatedAt: toIsoOrNow(row.updated_at)
   };
@@ -1798,6 +2389,8 @@ function mapNoteToRow(note, userId) {
     tags: note.tags,
     favorite: note.favorite,
     attachments: note.attachments,
+    audio_attachments: note.audioAttachments || [],
+    transcripts: normalizeTranscripts(note.transcripts || []),
     created_at: note.createdAt,
     updated_at: note.updatedAt
   };
@@ -2055,12 +2648,29 @@ function sanitizeFileName(name) {
   return String(name).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) || "image";
 }
 
+function inferAudioExtension(typeOrName) {
+  const normalized = String(typeOrName || "").toLowerCase();
+  if (normalized.includes("mp4") || normalized.includes("m4a")) return "m4a";
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return "mp3";
+  if (normalized.includes("ogg")) return "ogg";
+  if (normalized.includes("wav")) return "wav";
+  return "webm";
+}
+
 function isDataUrlAttachment(path) {
   return typeof path === "string" && path.startsWith("data:image");
 }
 
+function isOfflineImageBlobPath(path) {
+  return typeof path === "string" && path.startsWith(OFFLINE_IMAGE_BLOB_PREFIX);
+}
+
+function isOfflineAudioBlobPath(path) {
+  return typeof path === "string" && path.startsWith(OFFLINE_AUDIO_BLOB_PREFIX);
+}
+
 function isOfflineBlobPath(path) {
-  return typeof path === "string" && path.startsWith(OFFLINE_BLOB_PREFIX);
+  return isOfflineImageBlobPath(path) || isOfflineAudioBlobPath(path);
 }
 
 function pad2(num) {

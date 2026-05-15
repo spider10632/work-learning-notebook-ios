@@ -371,6 +371,12 @@ pre {
   padding: 3px 8px;
 }
 
+.note-audio-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
 .thumb-list {
   margin-top: 10px;
   display: grid;
@@ -517,6 +523,56 @@ pre {
 
 .attach-actions {
   grid-template-columns: 1fr 1fr;
+}
+
+.audio-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.audio-actions.compact {
+  margin-top: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.audio-player {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.audio-attachment-list {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.audio-attachment-item {
+  border: 1px solid #334762;
+  background: #111b2a;
+  border-radius: 10px;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.audio-attachment-item audio {
+  width: 100%;
+}
+
+.audio-attachment-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: #aac0db;
+}
+
+.transcript-actions {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
 }
 
 .hint {
@@ -753,5 +809,9 @@ pre {
 
   .quick-nav {
     width: min(70vw, 520px);
+  }
+
+  .transcript-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }

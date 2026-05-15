@@ -12,6 +12,8 @@ create table if not exists public.notes (
   tags text[] not null default '{}',
   favorite boolean not null default false,
   attachments text[] not null default '{}',
+  audio_attachments text[] not null default '{}',
+  transcripts jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint notes_category_check check (
@@ -26,6 +28,10 @@ create table if not exists public.notes (
     )
   )
 );
+
+alter table public.notes
+  add column if not exists audio_attachments text[] not null default '{}',
+  add column if not exists transcripts jsonb not null default '[]'::jsonb;
 
 create index if not exists notes_user_id_idx on public.notes(user_id);
 create index if not exists notes_user_updated_idx on public.notes(user_id, updated_at desc);
@@ -83,6 +89,10 @@ insert into storage.buckets (id, name, public)
 values ('note-attachments', 'note-attachments', false)
 on conflict (id) do nothing;
 
+insert into storage.buckets (id, name, public)
+values ('note-audio', 'note-audio', false)
+on conflict (id) do nothing;
+
 drop policy if exists "storage_select_own" on storage.objects;
 drop policy if exists "storage_insert_own" on storage.objects;
 drop policy if exists "storage_update_own" on storage.objects;
@@ -93,7 +103,7 @@ on storage.objects
 for select
 to authenticated
 using (
-  bucket_id = 'note-attachments'
+  bucket_id in ('note-attachments', 'note-audio')
   and (storage.foldername(name))[1] = auth.uid()::text
 );
 
@@ -102,7 +112,7 @@ on storage.objects
 for insert
 to authenticated
 with check (
-  bucket_id = 'note-attachments'
+  bucket_id in ('note-attachments', 'note-audio')
   and (storage.foldername(name))[1] = auth.uid()::text
 );
 
@@ -111,11 +121,11 @@ on storage.objects
 for update
 to authenticated
 using (
-  bucket_id = 'note-attachments'
+  bucket_id in ('note-attachments', 'note-audio')
   and (storage.foldername(name))[1] = auth.uid()::text
 )
 with check (
-  bucket_id = 'note-attachments'
+  bucket_id in ('note-attachments', 'note-audio')
   and (storage.foldername(name))[1] = auth.uid()::text
 );
 
@@ -124,6 +134,6 @@ on storage.objects
 for delete
 to authenticated
 using (
-  bucket_id = 'note-attachments'
+  bucket_id in ('note-attachments', 'note-audio')
   and (storage.foldername(name))[1] = auth.uid()::text
 );

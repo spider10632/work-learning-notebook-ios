@@ -158,6 +158,31 @@
             <p class="hint" id="speechHint"></p>
           </div>
           <div class="form-group">
+            <label>錄音轉文字（備援）</label>
+            <div class="audio-actions">
+              <button class="btn secondary" id="startRecordBtn" type="button">開始錄音</button>
+              <button class="btn secondary" id="stopRecordBtn" type="button" disabled>停止錄音</button>
+              <button class="btn ghost" id="resetRecordBtn" type="button">重新錄音</button>
+            </div>
+            <div class="audio-actions compact">
+              <button class="btn secondary" id="pickAudioBtn" type="button">選擇錄音檔</button>
+              <button class="btn primary" id="transcribeAudioBtn" type="button">送出轉寫</button>
+            </div>
+            <input class="hidden" id="audioUploadInput" type="file" accept="audio/*" capture />
+            <p class="hint" id="audioHint">建議 30–90 秒；離線可先暫存，連網後再送轉寫。</p>
+            <audio id="recordedAudioPreview" class="audio-player hidden" controls preload="metadata"></audio>
+            <div class="audio-attachment-list" id="audioAttachmentPreview"></div>
+          </div>
+          <div class="form-group hidden" id="transcriptPreviewPanel">
+            <label for="transcriptPreviewText">轉寫結果預覽</label>
+            <textarea id="transcriptPreviewText" rows="4" readonly></textarea>
+            <div class="transcript-actions">
+              <button class="btn secondary" id="appendTranscriptBtn" type="button">附加到內容</button>
+              <button class="btn primary" id="replaceTranscriptBtn" type="button">覆蓋內容</button>
+              <button class="btn ghost" id="clearTranscriptPreviewBtn" type="button">清除預覽</button>
+            </div>
+          </div>
+          <div class="form-group">
             <label>圖片（每筆最多 3 張）</label>
             <div class="attach-actions">
               <button class="btn secondary" id="pickPhotoBtn" type="button">相簿</button>
