@@ -91,6 +91,7 @@ const state = {
   scrollingLastY: 0,
   searchCollapsed: false,
   lastSearchCollapseToggleAt: 0,
+  obsidianVaultName: "",
   authListenerBound: false,
   syncInProgress: false,
   pendingOpsCount: 0,
@@ -318,11 +319,13 @@ function setupScrollCollapse() {
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
   if (isIOS) {
+    document.body.classList.add("ios-stable-scroll");
     state.searchCollapsed = false;
     refs.searchContainer.classList.remove("collapsed");
     return;
   }
 
+  document.body.classList.remove("ios-stable-scroll");
   state.scrollingLastY = window.scrollY || 0;
   state.searchCollapsed = false;
   state.lastSearchCollapseToggleAt = 0;
@@ -995,6 +998,13 @@ function buildExpandedDetail(note) {
   deleteBtn.textContent = "刪除";
   deleteBtn.addEventListener("click", () => deleteNote(note.id));
   actions.appendChild(deleteBtn);
+
+  const obsidianBtn = document.createElement("button");
+  obsidianBtn.type = "button";
+  obsidianBtn.className = "btn ghost";
+  obsidianBtn.textContent = "傳到 Obsidian";
+  obsidianBtn.addEventListener("click", () => sendNoteToObsidian(note));
+  actions.appendChild(obsidianBtn);
 
   detail.appendChild(actions);
   return detail;
@@ -2834,13 +2844,19 @@ function loadPrefs() {
     if (prefs.speechLang && SUPPORTED_SPEECH_MODES.includes(prefs.speechLang)) {
       refs.speechLangSelect.value = prefs.speechLang;
     }
+    if (typeof prefs.obsidianVaultName === "string") {
+      state.obsidianVaultName = prefs.obsidianVaultName.trim();
+    }
   } catch (_error) {
     // ignore
   }
 }
 
 function savePrefs() {
-  const prefs = { speechLang: refs.speechLangSelect.value };
+  const prefs = {
+    speechLang: refs.speechLangSelect.value,
+    obsidianVaultName: state.obsidianVaultName || ""
+  };
   localStorage.setItem(STORAGE_KEYS.prefs, JSON.stringify(prefs));
 }
 
@@ -2855,6 +2871,72 @@ function showAuthErrorFromHashIfAny() {
   const errorDescription = params.get("error_description");
   if (!errorDescription) return;
   showToast(errorDescription);
+}
+
+function sendNoteToObsidian(note) {
+  if (!note) return;
+  const configuredVault = String(state.obsidianVaultName || "").trim();
+  const vaultName =
+    configuredVault ||
+    window.prompt("請輸入 Obsidian Vault 名稱（僅第一次需要，之後會記住）", "");
+
+  if (!vaultName) {
+    showToast("未設定 Vault 名稱，已取消。");
+    return;
+  }
+
+  state.obsidianVaultName = vaultName.trim();
+  savePrefs();
+
+  const pathCategory = sanitizeObsidianPathSegment(note.category || "Other");
+  const pathTitle = sanitizeObsidianPathSegment(note.title || "Untitled");
+  const filePath = `Inbox/WorkNotebook/${pathCategory}/${pathTitle}`;
+  const markdown = buildObsidianMarkdown(note);
+  const maxContentLength = 6500;
+  const content = markdown.length > maxContentLength ? `${markdown.slice(0, maxContentLength)}\n\n...(內容已截斷)` : markdown;
+  const params = new URLSearchParams({
+    vault: state.obsidianVaultName,
+    file: filePath,
+    content,
+    overwrite: "true"
+  });
+  const uri = `obsidian://new?${params.toString()}`;
+
+  try {
+    window.location.href = uri;
+    if (markdown.length > maxContentLength) {
+      showToast("內容較長，已截斷後傳送到 Obsidian。");
+    } else {
+      showToast("已送出到 Obsidian。");
+    }
+  } catch (_error) {
+    showToast("無法開啟 Obsidian，請確認已安裝 App。");
+  }
+}
+
+function buildObsidianMarkdown(note) {
+  const tags = Array.isArray(note.tags) && note.tags.length ? note.tags.map((tag) => `#${tag}`).join(" ") : "";
+  const lines = [
+    `# ${note.title || "(無標題)"}`,
+    "",
+    `- Category: ${note.category || "Other"}`,
+    `- Updated: ${formatDateTime(note.updatedAt)}`,
+    tags ? `- Tags: ${tags}` : "",
+    "",
+    note.content || "",
+    "",
+    "----",
+    "_From Personal Work Learning Notebook_"
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function sanitizeObsidianPathSegment(value) {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|#[\]^]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "Untitled";
 }
 
 function showToast(message) {

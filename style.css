@@ -28,6 +28,10 @@ body {
   min-height: 100dvh;
 }
 
+body.ios-stable-scroll {
+  overscroll-behavior-y: none;
+}
+
 button,
 input,
 select,
@@ -208,6 +212,10 @@ pre {
   transition: padding 180ms ease, border-color 180ms ease;
 }
 
+body.ios-stable-scroll .search-container {
+  position: static;
+}
+
 .search-container.collapsed {
   padding-top: 6px;
   padding-bottom: 6px;
@@ -323,6 +331,12 @@ pre {
   padding: 2px 1px 8px;
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
+}
+
+body.ios-stable-scroll .stack-scroll {
+  max-height: none;
+  overflow: visible;
+  padding-bottom: 2px;
 }
 
 .stack-scroll::-webkit-scrollbar {
@@ -524,6 +538,7 @@ pre {
   margin-top: 12px;
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .empty {
@@ -575,6 +590,11 @@ pre {
   backdrop-filter: blur(8px);
   box-shadow: 0 14px 28px rgba(0, 0, 0, 0.35);
   backface-visibility: hidden;
+}
+
+body.ios-stable-scroll .quick-nav,
+body.ios-stable-scroll .search-container {
+  backdrop-filter: none;
 }
 
 .overlay {
