@@ -79,6 +79,7 @@ const state = {
   recording: false,
   transcribeInProgress: false,
   audioRecorderSupported: false,
+  schemaMigrationWarned: false,
   speechRecognition: null,
   listening: false,
   toastTimer: null,
@@ -1996,11 +1997,34 @@ async function syncUpsertOperation(op) {
   }
 
   const row = mapNoteToRow(noteToSync, state.user.id);
-  const { data, error } = await supabaseClient
-    .from("notes")
-    .upsert(row, { onConflict: "id" })
-    .select("*")
-    .single();
+  let { data, error } = await promiseWithTimeout(
+    supabaseClient
+      .from("notes")
+      .upsert(row, { onConflict: "id" })
+      .select("*")
+      .single(),
+    SYNC_OP_TIMEOUT_MS,
+    "同步寫入逾時"
+  );
+
+  if (error && isMissingNoteColumnsError(error)) {
+    if (!state.schemaMigrationWarned) {
+      state.schemaMigrationWarned = true;
+      showToast("資料庫尚未更新語音欄位，先以相容模式同步。請到 Supabase SQL 執行最新 supabase_setup.sql。");
+    }
+    const legacyRow = mapLegacyNoteToRow(noteToSync, state.user.id);
+    const fallback = await promiseWithTimeout(
+      supabaseClient
+        .from("notes")
+        .upsert(legacyRow, { onConflict: "id" })
+        .select("*")
+        .single(),
+      SYNC_OP_TIMEOUT_MS,
+      "相容同步寫入逾時"
+    );
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) throw error;
 
@@ -2395,6 +2419,21 @@ function mapNoteToRow(note, userId) {
   };
 }
 
+function mapLegacyNoteToRow(note, userId) {
+  return {
+    id: note.id,
+    user_id: userId,
+    title: note.title,
+    content: note.content,
+    category: note.category,
+    tags: note.tags,
+    favorite: note.favorite,
+    attachments: note.attachments,
+    created_at: note.createdAt,
+    updated_at: note.updatedAt
+  };
+}
+
 async function saveNotesCacheForUser(userId, notes) {
   if (!state.idbReady) return;
   await idbDeleteByUser("notes_cache", userId);
@@ -2639,6 +2678,15 @@ function showToast(message) {
 
 function readableError(error) {
   return error?.message || "未知錯誤";
+}
+
+function isMissingNoteColumnsError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const code = String(error?.code || "").toUpperCase();
+  const missingAudio = message.includes("audio_attachments");
+  const missingTranscripts = message.includes("transcripts");
+  const schemaCache = message.includes("schema cache");
+  return (missingAudio || missingTranscripts) && (schemaCache || code === "PGRST204");
 }
 
 function formatDateTime(isoString) {
