@@ -63,6 +63,7 @@ const state = {
   user: null,
   notes: [],
   filteredNotes: [],
+  expandedBySection: {},
   signedUrlCache: new Map(),
   editingId: null,
   editorExistingAttachments: [],
@@ -583,6 +584,7 @@ async function applySession(session) {
   if (!user) {
     state.notes = [];
     state.filteredNotes = [];
+    state.expandedBySection = {};
     state.signedUrlCache.clear();
     renderNotes();
     closeEditor();
@@ -728,41 +730,173 @@ function applyFiltersAndRender() {
 }
 
 function renderNotes() {
+  const scrollPositions = captureStackScrollPositions();
   refs.notesList.innerHTML = "";
   refs.resultCount.textContent = `${state.filteredNotes.length} 筆`;
   refs.emptyState.classList.toggle("hidden", state.filteredNotes.length > 0);
 
-  for (const note of state.filteredNotes) {
-    refs.notesList.appendChild(buildNoteCard(note));
+  if (!state.filteredNotes.length) {
+    state.expandedBySection = {};
+    updateDashboardStats();
+    return;
   }
+
+  const sectionEntries = buildSectionEntries(state.filteredNotes);
+  sanitizeExpandedState(sectionEntries);
+
+  const fragment = document.createDocumentFragment();
+  for (const sectionEntry of sectionEntries) {
+    fragment.appendChild(buildStackSection(sectionEntry));
+  }
+  refs.notesList.appendChild(fragment);
+  restoreStackScrollPositions(scrollPositions);
   updateDashboardStats();
 }
 
-function buildNoteCard(note) {
-  const card = document.createElement("article");
-  card.className = "note-card";
+function buildSectionEntries(notes) {
+  const entries = [];
+  const favorites = notes.filter((note) => note.favorite);
+  if (favorites.length) {
+    entries.push({
+      key: "favorites",
+      title: "收藏",
+      notes: favorites,
+      isFavoriteSection: true
+    });
+  }
 
-  const head = document.createElement("div");
-  head.className = "note-head";
+  for (const category of CATEGORIES) {
+    const groupedNotes = notes.filter((note) => note.category === category);
+    if (!groupedNotes.length) continue;
+    entries.push({
+      key: `category:${category}`,
+      title: category,
+      notes: groupedNotes,
+      isFavoriteSection: false
+    });
+  }
+  return entries;
+}
 
-  const title = document.createElement("h3");
-  title.className = "note-title";
+function sanitizeExpandedState(sectionEntries) {
+  const nextExpanded = {};
+  for (const sectionEntry of sectionEntries) {
+    const expandedId = state.expandedBySection[sectionEntry.key];
+    if (!expandedId) continue;
+    const stillExists = sectionEntry.notes.some((note) => note.id === expandedId);
+    if (stillExists) {
+      nextExpanded[sectionEntry.key] = expandedId;
+    }
+  }
+  state.expandedBySection = nextExpanded;
+}
+
+function captureStackScrollPositions() {
+  const positions = new Map();
+  refs.notesList.querySelectorAll(".stack-scroll").forEach((el) => {
+    const key = el.dataset.sectionKey;
+    if (!key) return;
+    positions.set(key, el.scrollTop);
+  });
+  return positions;
+}
+
+function restoreStackScrollPositions(positions) {
+  refs.notesList.querySelectorAll(".stack-scroll").forEach((el) => {
+    const key = el.dataset.sectionKey;
+    if (!key) return;
+    const top = positions.get(key);
+    if (typeof top === "number") {
+      el.scrollTop = top;
+    }
+  });
+}
+
+function buildStackSection(sectionEntry) {
+  const section = document.createElement("article");
+  section.className = `stack-section${sectionEntry.isFavoriteSection ? " stack-section-favorite" : ""}`;
+
+  const head = document.createElement("header");
+  head.className = "stack-section-head";
+
+  const heading = document.createElement("h3");
+  heading.className = "stack-section-title";
+  heading.textContent = sectionEntry.title;
+  head.appendChild(heading);
+
+  const count = document.createElement("span");
+  count.className = "stack-section-count";
+  count.textContent = `${sectionEntry.notes.length} 筆`;
+  head.appendChild(count);
+  section.appendChild(head);
+
+  const scroll = document.createElement("div");
+  scroll.className = "stack-scroll";
+  scroll.dataset.sectionKey = sectionEntry.key;
+  scroll.setAttribute("role", "list");
+
+  sectionEntry.notes.forEach((note, index) => {
+    scroll.appendChild(buildStackItem(sectionEntry.key, note, index, sectionEntry.notes.length));
+  });
+
+  section.appendChild(scroll);
+  return section;
+}
+
+function buildStackItem(sectionKey, note, index, total) {
+  const expanded = state.expandedBySection[sectionKey] === note.id;
+  const item = document.createElement("article");
+  item.className = `stack-item${expanded ? " expanded" : ""}`;
+  item.style.zIndex = String(total - index);
+  item.setAttribute("role", "listitem");
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "stack-trigger";
+  trigger.setAttribute("aria-expanded", expanded ? "true" : "false");
+  trigger.addEventListener("click", () => toggleStackItem(sectionKey, note.id));
+
+  const titleWrap = document.createElement("span");
+  titleWrap.className = "stack-title-wrap";
+
+  const title = document.createElement("span");
+  title.className = "stack-note-title";
   title.textContent = note.title || "(無標題)";
-  head.appendChild(title);
+  titleWrap.appendChild(title);
 
-  const controls = document.createElement("div");
-  controls.className = "note-controls";
+  const updated = document.createElement("span");
+  updated.className = "stack-note-updated";
+  updated.textContent = formatDateTime(note.updatedAt);
+  titleWrap.appendChild(updated);
 
-  const favBtn = document.createElement("button");
-  favBtn.type = "button";
-  favBtn.className = `btn icon ghost ${note.favorite ? "favorite-active" : ""}`;
-  favBtn.title = "收藏";
-  favBtn.textContent = note.favorite ? "★" : "☆";
-  favBtn.addEventListener("click", () => toggleFavorite(note.id));
-  controls.appendChild(favBtn);
+  trigger.appendChild(titleWrap);
 
-  head.appendChild(controls);
-  card.appendChild(head);
+  const indicator = document.createElement("span");
+  indicator.className = "stack-expand-indicator";
+  indicator.textContent = expanded ? "−" : "+";
+  trigger.appendChild(indicator);
+
+  item.appendChild(trigger);
+
+  if (expanded) {
+    item.appendChild(buildExpandedDetail(note));
+  }
+  return item;
+}
+
+function toggleStackItem(sectionKey, noteId) {
+  const currentId = state.expandedBySection[sectionKey];
+  if (currentId === noteId) {
+    delete state.expandedBySection[sectionKey];
+  } else {
+    state.expandedBySection[sectionKey] = noteId;
+  }
+  renderNotes();
+}
+
+function buildExpandedDetail(note) {
+  const detail = document.createElement("div");
+  detail.className = "stack-detail";
 
   const meta = document.createElement("div");
   meta.className = "note-meta";
@@ -774,28 +908,76 @@ function buildNoteCard(note) {
   updatedText.textContent = `更新：${formatDateTime(note.updatedAt)}`;
   meta.appendChild(categoryBadge);
   meta.appendChild(updatedText);
-  card.appendChild(meta);
+  detail.appendChild(meta);
 
   const content = document.createElement("p");
   content.className = "note-content";
   content.textContent = note.content;
-  card.appendChild(content);
+  detail.appendChild(content);
 
+  if ((note.tags || []).length > 0) {
+    detail.appendChild(buildTagList(note.tags));
+  }
+
+  if ((note.attachments || []).length > 0) {
+    detail.appendChild(buildImageThumbList(note.attachments));
+  }
+
+  if ((note.audioAttachments || []).length > 0) {
+    detail.appendChild(buildAudioAttachmentList(note.audioAttachments));
+  }
+
+  if ((note.transcripts || []).length > 0) {
+    const transcriptMeta = document.createElement("div");
+    transcriptMeta.className = "note-meta";
+    transcriptMeta.textContent = `語音轉寫紀錄：${note.transcripts.length} 筆`;
+    detail.appendChild(transcriptMeta);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+
+  const favoriteBtn = document.createElement("button");
+  favoriteBtn.type = "button";
+  favoriteBtn.className = `btn secondary${note.favorite ? " favorite-active" : ""}`;
+  favoriteBtn.textContent = note.favorite ? "取消收藏" : "加入收藏";
+  favoriteBtn.addEventListener("click", () => toggleFavorite(note.id));
+  actions.appendChild(favoriteBtn);
+
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "btn secondary";
+  editBtn.textContent = "編輯";
+  editBtn.addEventListener("click", () => openEditor(note));
+  actions.appendChild(editBtn);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "btn danger";
+  deleteBtn.textContent = "刪除";
+  deleteBtn.addEventListener("click", () => deleteNote(note.id));
+  actions.appendChild(deleteBtn);
+
+  detail.appendChild(actions);
+  return detail;
+}
+
+function buildTagList(tagsInput) {
   const tags = document.createElement("div");
   tags.className = "tag-list";
-  for (const tag of note.tags || []) {
+  for (const tag of tagsInput || []) {
     const chip = document.createElement("span");
     chip.className = "tag-chip";
     chip.textContent = `#${tag}`;
     tags.appendChild(chip);
   }
-  if ((note.tags || []).length > 0) {
-    card.appendChild(tags);
-  }
+  return tags;
+}
 
+function buildImageThumbList(paths) {
   const thumbList = document.createElement("div");
   thumbList.className = "thumb-list";
-  for (const path of note.attachments || []) {
+  for (const path of paths || []) {
     const img = document.createElement("img");
     img.alt = "attachment";
     img.dataset.path = path;
@@ -820,75 +1002,46 @@ function buildNoteCard(note) {
     });
     thumbList.appendChild(img);
   }
-  if ((note.attachments || []).length > 0) {
-    card.appendChild(thumbList);
-  }
+  return thumbList;
+}
 
-  const audioPaths = note.audioAttachments || [];
-  if (audioPaths.length > 0) {
-    const audioList = document.createElement("div");
-    audioList.className = "note-audio-list";
-    audioPaths.forEach((path, index) => {
-      const item = document.createElement("div");
-      item.className = "audio-attachment-item";
+function buildAudioAttachmentList(paths) {
+  const audioPaths = Array.isArray(paths) ? paths : [];
+  const audioList = document.createElement("div");
+  audioList.className = "note-audio-list";
+  audioPaths.forEach((path, index) => {
+    const item = document.createElement("div");
+    item.className = "audio-attachment-item";
 
-      const header = document.createElement("div");
-      header.className = "audio-attachment-item-header";
-      const title = document.createElement("span");
-      title.textContent = `錄音 ${index + 1}`;
-      header.appendChild(title);
+    const header = document.createElement("div");
+    header.className = "audio-attachment-item-header";
+    const title = document.createElement("span");
+    title.textContent = `錄音 ${index + 1}`;
+    header.appendChild(title);
 
-      if (isOfflineAudioBlobPath(path)) {
-        const status = document.createElement("span");
-        status.className = "muted";
-        status.textContent = "待同步";
-        header.appendChild(status);
-        item.appendChild(header);
+    if (isOfflineAudioBlobPath(path)) {
+      const status = document.createElement("span");
+      status.className = "muted";
+      status.textContent = "待同步";
+      header.appendChild(status);
+      item.appendChild(header);
+    } else {
+      item.appendChild(header);
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.preload = "metadata";
+      const cachedAudioUrl = getCachedSignedUrl(AUDIO_STORAGE_BUCKET, path);
+      if (cachedAudioUrl) {
+        audio.src = cachedAudioUrl;
       } else {
-        item.appendChild(header);
-        const audio = document.createElement("audio");
-        audio.controls = true;
-        audio.preload = "metadata";
-        const cachedAudioUrl = getCachedSignedUrl(AUDIO_STORAGE_BUCKET, path);
-        if (cachedAudioUrl) {
-          audio.src = cachedAudioUrl;
-        } else {
-          hydrateSignedUrlForAudio(path, audio);
-        }
-        item.appendChild(audio);
+        hydrateSignedUrlForAudio(path, audio);
       }
+      item.appendChild(audio);
+    }
 
-      audioList.appendChild(item);
-    });
-    card.appendChild(audioList);
-  }
-
-  if ((note.transcripts || []).length > 0) {
-    const transcriptMeta = document.createElement("div");
-    transcriptMeta.className = "note-meta";
-    transcriptMeta.textContent = `語音轉寫紀錄：${note.transcripts.length} 筆`;
-    card.appendChild(transcriptMeta);
-  }
-
-  const actions = document.createElement("div");
-  actions.className = "card-actions";
-
-  const editBtn = document.createElement("button");
-  editBtn.type = "button";
-  editBtn.className = "btn secondary";
-  editBtn.textContent = "編輯";
-  editBtn.addEventListener("click", () => openEditor(note));
-  actions.appendChild(editBtn);
-
-  const deleteBtn = document.createElement("button");
-  deleteBtn.type = "button";
-  deleteBtn.className = "btn danger";
-  deleteBtn.textContent = "刪除";
-  deleteBtn.addEventListener("click", () => deleteNote(note.id));
-  actions.appendChild(deleteBtn);
-
-  card.appendChild(actions);
-  return card;
+    audioList.appendChild(item);
+  });
+  return audioList;
 }
 
 async function hydrateSignedUrlForImage(path, imgElement) {

@@ -281,7 +281,134 @@ pre {
 
 .notes-grid {
   display: grid;
-  gap: 12px;
+  gap: 14px;
+}
+
+.stack-section {
+  border: 1px solid #2e415b;
+  border-radius: 16px;
+  padding: 10px;
+  background: linear-gradient(165deg, rgba(22, 34, 51, 0.95), rgba(14, 22, 34, 0.95));
+  box-shadow: var(--shadow);
+}
+
+.stack-section-favorite {
+  border-color: #5a4f2f;
+  background: linear-gradient(165deg, rgba(35, 30, 20, 0.92), rgba(18, 22, 32, 0.96));
+}
+
+.stack-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.stack-section-title {
+  margin: 0;
+  font-family: "Manrope", sans-serif;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
+.stack-section-count {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.stack-scroll {
+  max-height: clamp(260px, 42vh, 460px);
+  overflow-y: auto;
+  padding: 2px 1px 8px;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.stack-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.stack-scroll::-webkit-scrollbar-thumb {
+  background: #3a4f6a;
+  border-radius: 999px;
+}
+
+.stack-item {
+  position: relative;
+  margin-top: -14px;
+  border-radius: 13px;
+  border: 1px solid #354b66;
+  background: linear-gradient(180deg, #1a2a3f 0%, #131f31 100%);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.stack-item:first-child {
+  margin-top: 0;
+}
+
+.stack-item.expanded {
+  margin-top: 8px;
+  margin-bottom: 10px;
+}
+
+.stack-item.expanded + .stack-item {
+  margin-top: -6px;
+}
+
+.stack-trigger {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.stack-title-wrap {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.stack-note-title {
+  font-family: "Manrope", sans-serif;
+  font-size: 1rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stack-note-updated {
+  color: #9ab0cc;
+  font-size: 0.74rem;
+}
+
+.stack-expand-indicator {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid #415a79;
+  display: grid;
+  place-items: center;
+  font-size: 1.08rem;
+  color: #b4cef0;
+  flex-shrink: 0;
+}
+
+.stack-detail {
+  border-top: 1px solid #314962;
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 8px;
+  background: rgba(8, 14, 24, 0.35);
 }
 
 .note-card {
@@ -778,7 +905,11 @@ pre {
   }
 
   .notes-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .stack-scroll {
+    max-height: clamp(300px, 46vh, 560px);
   }
 
   .overlay {
