@@ -22,6 +22,8 @@ const DB_VERSION = 1;
 const MAX_ATTACHMENTS = 3;
 const MAX_AUDIO_ATTACHMENTS = 3;
 const SIGNED_URL_TTL_SECONDS = 600;
+const NETWORK_OP_TIMEOUT_MS = 15000;
+const SYNC_OP_TIMEOUT_MS = 20000;
 const SEARCH_COLLAPSE_SCROLL_Y = 80;
 const OFFLINE_IMAGE_BLOB_PREFIX = "offline-image-blob:";
 const OFFLINE_AUDIO_BLOB_PREFIX = "offline-audio-blob:";
@@ -1544,11 +1546,15 @@ async function uploadImageBlobToStorage(noteId, blob, fileName) {
   const safeName = sanitizeFileName(fileName || "image");
   const path = `${state.user.id}/${noteId}/${Date.now()}-${safeName}.jpg`;
 
-  const { error } = await supabaseClient.storage.from(IMAGE_STORAGE_BUCKET).upload(path, blob, {
-    cacheControl: "3600",
-    contentType: "image/jpeg",
-    upsert: false
-  });
+  const { error } = await promiseWithTimeout(
+    supabaseClient.storage.from(IMAGE_STORAGE_BUCKET).upload(path, blob, {
+      cacheControl: "3600",
+      contentType: "image/jpeg",
+      upsert: false
+    }),
+    NETWORK_OP_TIMEOUT_MS,
+    "圖片上傳逾時"
+  );
   if (error) throw error;
 
   return path;
@@ -1590,11 +1596,15 @@ async function uploadAudioBlobToStorage(noteId, blob, fileName) {
   const extension = inferAudioExtension(blob.type || fileName);
   const path = `${state.user.id}/${noteId}/${Date.now()}-${safeName}.${extension}`;
 
-  const { error } = await supabaseClient.storage.from(AUDIO_STORAGE_BUCKET).upload(path, blob, {
-    cacheControl: "3600",
-    contentType: blob.type || "audio/webm",
-    upsert: false
-  });
+  const { error } = await promiseWithTimeout(
+    supabaseClient.storage.from(AUDIO_STORAGE_BUCKET).upload(path, blob, {
+      cacheControl: "3600",
+      contentType: blob.type || "audio/webm",
+      upsert: false
+    }),
+    NETWORK_OP_TIMEOUT_MS,
+    "錄音上傳逾時"
+  );
   if (error) throw error;
   return path;
 }
@@ -1604,7 +1614,7 @@ async function requestAudioTranscription(path, langMode) {
   const payload = { path, bucket: AUDIO_STORAGE_BUCKET, langMode };
   const { data, error } = await promiseWithTimeout(
     supabaseClient.functions.invoke(TRANSCRIBE_FUNCTION_NAME, { body: payload }),
-    15000,
+    NETWORK_OP_TIMEOUT_MS,
     "語音轉寫逾時"
   );
   if (error) throw error;
@@ -1917,7 +1927,7 @@ async function processSyncQueue() {
 
       for (const op of ops) {
         try {
-          await syncOperation(op);
+          await promiseWithTimeout(syncOperation(op), SYNC_OP_TIMEOUT_MS, "同步操作逾時");
           progress = true;
         } catch (error) {
           console.error("sync operation failed", error);
@@ -1929,7 +1939,7 @@ async function processSyncQueue() {
       }
     }
 
-    await refreshNotesFromCloud();
+    await promiseWithTimeout(refreshNotesFromCloud(), SYNC_OP_TIMEOUT_MS, "同步刷新逾時");
     await refreshQueueIndicators();
     state.lastSyncAt = new Date().toISOString();
     updateSyncStatusUI();
