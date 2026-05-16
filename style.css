@@ -554,12 +554,14 @@ pre {
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 16px 32px rgba(18, 112, 184, 0.4);
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .quick-nav {
   position: fixed;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate3d(-50%, 0, 0);
   bottom: max(14px, env(safe-area-inset-bottom));
   width: min(96vw, 540px);
   z-index: 80;
@@ -572,6 +574,7 @@ pre {
   background: rgba(10, 16, 24, 0.92);
   backdrop-filter: blur(8px);
   box-shadow: 0 14px 28px rgba(0, 0, 0, 0.35);
+  backface-visibility: hidden;
 }
 
 .overlay {

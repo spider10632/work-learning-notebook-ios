@@ -25,6 +25,10 @@ const SIGNED_URL_TTL_SECONDS = 600;
 const NETWORK_OP_TIMEOUT_MS = 15000;
 const SYNC_OP_TIMEOUT_MS = 20000;
 const SEARCH_COLLAPSE_SCROLL_Y = 80;
+const SEARCH_COLLAPSE_ENTER_Y = 120;
+const SEARCH_COLLAPSE_EXIT_Y = 36;
+const SEARCH_COLLAPSE_DELTA_MIN = 6;
+const SEARCH_COLLAPSE_TOGGLE_COOLDOWN_MS = 220;
 const OFFLINE_IMAGE_BLOB_PREFIX = "offline-image-blob:";
 const OFFLINE_AUDIO_BLOB_PREFIX = "offline-audio-blob:";
 const SPEECH_MODE_MIXED = "mixed-zh-en";
@@ -85,6 +89,8 @@ const state = {
   listening: false,
   toastTimer: null,
   scrollingLastY: 0,
+  searchCollapsed: false,
+  lastSearchCollapseToggleAt: 0,
   authListenerBound: false,
   syncInProgress: false,
   pendingOpsCount: 0,
@@ -305,15 +311,47 @@ function bindEvents() {
 }
 
 function setupScrollCollapse() {
+  // iOS Safari / iOS WebView 在頁面底部回彈時，sticky+收合動畫容易產生抖動
+  // 因此在 iOS 直接關閉收合效果，優先確保滑動穩定性。
+  const isIOS =
+    /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  if (isIOS) {
+    state.searchCollapsed = false;
+    refs.searchContainer.classList.remove("collapsed");
+    return;
+  }
+
   state.scrollingLastY = window.scrollY || 0;
+  state.searchCollapsed = false;
+  state.lastSearchCollapseToggleAt = 0;
   window.addEventListener(
     "scroll",
     () => {
       if (refs.searchContainer.classList.contains("hidden")) return;
-      const y = window.scrollY || 0;
-      const isDown = y > state.scrollingLastY;
-      const shouldCollapse = isDown && y > SEARCH_COLLAPSE_SCROLL_Y;
-      refs.searchContainer.classList.toggle("collapsed", shouldCollapse);
+      const y = Math.max(0, window.scrollY || 0);
+      const delta = y - state.scrollingLastY;
+      const now = Date.now();
+      const canToggle = now - state.lastSearchCollapseToggleAt > SEARCH_COLLAPSE_TOGGLE_COOLDOWN_MS;
+
+      if (!state.searchCollapsed) {
+        const shouldCollapse = y > SEARCH_COLLAPSE_ENTER_Y && delta > SEARCH_COLLAPSE_DELTA_MIN;
+        if (shouldCollapse && canToggle) {
+          state.searchCollapsed = true;
+          state.lastSearchCollapseToggleAt = now;
+          refs.searchContainer.classList.add("collapsed");
+        }
+      } else {
+        const nearTop = y < SEARCH_COLLAPSE_EXIT_Y;
+        const strongUp = delta < -SEARCH_COLLAPSE_DELTA_MIN * 1.5 && y < SEARCH_COLLAPSE_SCROLL_Y * 3;
+        if ((nearTop || strongUp) && canToggle) {
+          state.searchCollapsed = false;
+          state.lastSearchCollapseToggleAt = now;
+          refs.searchContainer.classList.remove("collapsed");
+        }
+      }
+
       state.scrollingLastY = y;
     },
     { passive: true }
